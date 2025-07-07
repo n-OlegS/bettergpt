@@ -1,0 +1,1 @@
+ollama create bettergpt -f modelfile.txt
