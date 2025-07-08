@@ -1,0 +1,37 @@
+# docker-compose.yml  (no Ollama service)
+version: "3.9"
+
+x-env: &env
+  TG_BOT_TOKEN: "${TG_BOT_TOKEN}"          # put this in .env
+  LLM_API_URL:  "http://192.168.0.42:11434"  # remote Ollama box
+  LLM_MODEL:    "bettergpt:latest"
+  REDIS_HOST:   "redis"
+
+services:
+  # ----------- Redis (queue + context) ---------------------------
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports: ["6379:6379"]                   # expose only if you want
+
+  # ----------- singleton Telegram bot ---------------------------
+  telegram-bot:
+    build: .                               # uses the Dockerfile
+    command: python -m app.telegram_bot
+    env_file: .env
+    environment: *env
+    depends_on: [redis]
+    restart: always
+    deploy:
+      replicas: 1                          # must stay single
+
+  # ----------- scalable RQ workers ------------------------------
+  worker:
+    build: .
+    command: python -m app.worker
+    env_file: .env
+    environment: *env
+    depends_on: [redis]
+    restart: always
+    deploy:
+      replicas: 2                          # scale via: --scale worker=N
