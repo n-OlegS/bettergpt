@@ -18,8 +18,9 @@ from app.telegram_bot import send_part, reset_elapsed   # re-use the bot’s sen
 
 redis_conn = Redis()                      # host/port/db kwargs as needed
 
-llm = LLMGateway(api_url=dotenv.get_key("../.env", "LLM_API_URL"),
-                 model=dotenv.get_key("../.env", "LLM_MODEL"))
+llm = LLMGateway(api_url="https://api.openai.com/v1/chat/completions",
+                 api_key=dotenv.get_key("../.env", "OPENAI_API_KEY"),
+                 model=dotenv.get_key("../.env", "LLM_MODEL") or "gpt-3.5-turbo")
 ctx = ContextManager()
 
 
