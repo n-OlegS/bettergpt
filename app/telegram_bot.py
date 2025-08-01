@@ -8,7 +8,7 @@ Telegram bot transport (pytelegrambotapi)
 """
 from __future__ import annotations
 import dotenv
-import threading, asyncio
+import threading, asyncio, time
 from typing import Dict
 
 import telebot
@@ -70,24 +70,60 @@ async def send_part(user_id: int, text: str):
 def on_message(message: telebot.types.Message):
     user_id = message.from_user.id
     text = message.text
+    print(f"📥 BOT: Received message from user {user_id}: '{text}'")
 
     # ---------------- cancel an in-flight bot reply ------------------ #
     sq = send_queues.get(user_id)
+    cancel_key = f"cancel_reply:{user_id}"
+    
+    # Check if there's an active response 
+    last_ai_time_key = f"last_ai_reply:{user_id}"
+    response_started_key = f"response_started:{user_id}"
+    response_in_progress = False
+    
+    # Check for response currently being streamed
+    if redis.exists(response_started_key):
+        response_started_time = float(redis.get(response_started_key).decode())
+        print(f"🔄 BOT: Response currently streaming (started {time.time() - response_started_time:.1f}s ago)")
+        response_in_progress = True
+    # Check for recent completed response that might still be relevant
+    elif redis.exists(last_ai_time_key):
+        last_ai_time = float(redis.get(last_ai_time_key).decode())
+        # Consider response in progress if it was within last 30 seconds
+        if time.time() - last_ai_time < 30:
+            response_in_progress = True
+            print(f"🔄 BOT: Recent response detected (last AI reply {time.time() - last_ai_time:.1f}s ago)")
+    
     if sq:
+        print(f"❌ BOT: Cancelling existing SendQueue for user {user_id}")
         sq.cancel()                 # stop any queued parts immediately
+        # Also set Redis cancellation signal for worker's SendQueue
+        redis.set(cancel_key, "1", ex=10)  # expires in 10 seconds
+        print(f"🚩 BOT: Set Redis cancel signal '{cancel_key}' (expires in 10s)")
+    elif response_in_progress:
+        print(f"❌ BOT: No local SendQueue but response in progress, setting cancel signal")
+        # Set Redis cancellation signal for worker's SendQueue
+        redis.set(cancel_key, "1", ex=10)  # expires in 10 seconds
+        print(f"🚩 BOT: Set Redis cancel signal '{cancel_key}' (expires in 10s)")
+    else:
+        print(f"ℹ️ BOT: No response in progress, not setting cancel signal")
 
-    # ---------------- feed text into the user’s chunker -------------- #
+    # ---------------- feed text into the user's chunker -------------- #
     ch = chunkers.setdefault(user_id, Chunker(timeout=1.5, user_id=user_id))
-    print("Inited chunker", chunkers)
+    print(f"🧠 BOT: Using chunker for user {user_id}")
 
     # Chunker is async, pytelegrambotapi is sync → delegate to event-loop
+    print(f"🔄 BOT: Feeding text to chunker...")
     thought = asyncio.run_coroutine_threadsafe(ch.feed(text), loop).result()
-    # ch.feed(text)
-    print("Fed thought - telebot")
+    print(f"🔄 BOT: Chunker.feed() completed")
 
     if thought:                     # a full "thought" is ready
+        print(f"💡 BOT: Thought formed: '{thought}'")
         # enqueue background job for the worker
-        rq_queue.enqueue("app.worker.process_thought", user_id, thought)
+        job = rq_queue.enqueue("app.worker.process_thought", user_id, thought)
+        print(f"📋 BOT: Enqueued job {job.id} for worker")
+    else:
+        print(f"⏳ BOT: No thought formed yet, waiting for more input...")
 
 
 # --------------------------------------------------------------------- #
